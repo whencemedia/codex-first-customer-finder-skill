@@ -1,0 +1,67 @@
+name: Find customers
+
+on:
+  schedule:
+    - cron: "17 3 * * 1" # Mondays 08:47 IST: new prospects for Whence
+  workflow_dispatch:
+    inputs:
+      product:
+        description: "Product or brand URL (or a short description) to find customers for"
+        required: true
+        default: "https://whencemedia.com"
+      count:
+        description: "How many prospects"
+        required: false
+        default: "10"
+      focus:
+        description: "Optional extra direction (who to target or avoid)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: find-customers
+  cancel-in-progress: false
+
+jobs:
+  find:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PRODUCT: ${{ github.event.inputs.product || 'https://whencemedia.com' }}
+      COUNT: ${{ github.event.inputs.count || '10' }}
+      FOCUS: ${{ github.event.inputs.focus || 'Indian D2C brands, founder-led businesses and coaches with real revenue who already value brand building, not celebrity brands, not huge companies, not tiny side projects. Avoid brands that only want performance or influencer marketing.' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run First Customer Finder with Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Use the first-customer-finder skill in .claude/skills/first-customer-finder.
+            Product: ${{ env.PRODUCT }}
+            Find ${{ env.COUNT }} potential customers.
+            Extra direction: ${{ env.FOCUS }}
+            Keep this product's saved history under reports/history/ and respect it (skip prospects already seen).
+            Save the final report as Markdown and CSV in reports/ with today's date in the file names.
+            Do not contact anyone. Do not ask questions; make reasonable assumptions and note them in the report.
+          claude_args: |
+            --allowedTools WebSearch,WebFetch,Read,Write,Edit,Glob,Grep,Bash(python3:*),Bash(python:*),Bash(mkdir:*),Bash(ls:*),Bash(date:*)
+            --max-turns 80
+
+      - name: Commit the report
+        run: |
+          git config user.name "whence-prospects-bot"
+          git config user.email "whence-prospects-bot@users.noreply.github.com"
+          git add reports
+          git diff --cached --quiet && echo "No new report" && exit 0
+          git commit -m "Customer finder report $(date -u +%Y-%m-%d)"
+          git push
