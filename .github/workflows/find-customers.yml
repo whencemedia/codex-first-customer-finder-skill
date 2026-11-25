@@ -12,14 +12,18 @@ on:
       count:
         description: "How many prospects"
         required: false
-        default: "10"
+        default: "15"
       focus:
         description: "Optional extra direction (who to target or avoid)"
         required: false
         default: ""
+      add_to_sheet:
+        description: "Add prospects with a public email to the India tab of the lead sheet"
+        type: boolean
+        default: true
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: find-customers
@@ -31,8 +35,10 @@ jobs:
     timeout-minutes: 60
     env:
       PRODUCT: ${{ github.event.inputs.product || 'https://whencemedia.com' }}
-      COUNT: ${{ github.event.inputs.count || '10' }}
-      FOCUS: ${{ github.event.inputs.focus || 'Indian D2C brands, founder-led businesses and coaches with real revenue who already value brand building, not celebrity brands, not huge companies, not tiny side projects. Avoid brands that only want performance or influencer marketing.' }}
+      COUNT: ${{ github.event.inputs.count || '15' }}
+      FOCUS: ${{ github.event.inputs.focus || 'Indian D2C brands, founder-led businesses, and coaches who already have clients but a small online presence. They should have real revenue and already value brand building. No celebrity brands, no huge companies, no tiny side projects. Avoid brands that only want performance or influencer marketing.' }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      LEADS_SHEET_ID: ${{ secrets.LEADS_SHEET_ID || '1Qg2mwQbDsUkqVunOa0nVlU6t6aKByFmMtKgWV-kVKw4' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,18 +56,28 @@ jobs:
             Product: ${{ env.PRODUCT }}
             Find ${{ env.COUNT }} potential customers.
             Extra direction: ${{ env.FOCUS }}
-            Keep this product's saved history under reports/history/ and respect it (skip prospects already seen).
-            Save the final report as Markdown and CSV in reports/ with today's date in the file names.
+            Keep working files and history under out/history/.
+            Save the full report as Markdown and CSV in out/ with today's date in the file names.
+
+            Also write out/sheet-rows.csv with exactly this header row:
+            Date added,Segment,Name,Niche,City,Website,Instagram,Founder Instagram,Founder LinkedIn,Size / budget signal,Brand-minded signal,Public email,Public phone,Why they're a fit,Source,Status,Notes
+            One row per qualified prospect. Date added is today (YYYY-MM-DD). Segment is one of: D2C brand, Startup / funded, Local business, Coach / creator. Public email must be a business email published on the prospect's own website or official profile; leave it empty if you cannot find one, never guess. Source is the URL of the public evidence. Status is New. Use plain sentences, no em dashes.
+
             Do not contact anyone. Do not ask questions; make reasonable assumptions and note them in the report.
           claude_args: |
             --allowedTools WebSearch,WebFetch,Read,Write,Edit,Glob,Grep,Bash(python3:*),Bash(python:*),Bash(mkdir:*),Bash(ls:*),Bash(date:*)
             --max-turns 80
 
-      - name: Commit the report
+      - name: Add prospects to the lead sheet
+        if: github.event_name == 'schedule' || github.event.inputs.add_to_sheet == 'true'
         run: |
-          git config user.name "whence-prospects-bot"
-          git config user.email "whence-prospects-bot@users.noreply.github.com"
-          git add reports
-          git diff --cached --quiet && echo "No new report" && exit 0
-          git commit -m "Customer finder report $(date -u +%Y-%m-%d)"
-          git push
+          pip install --quiet gspread
+          python whence/push_to_sheet.py out/sheet-rows.csv India | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the report for 30 days
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: customer-finder-${{ github.run_id }}
+          path: out/
+          retention-days: 30
